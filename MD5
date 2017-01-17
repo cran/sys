@@ -1,0 +1,12 @@
+885672afda94c802f508c62e17935692 *DESCRIPTION
+0415cc42e49162c660c31e1c33153a9d *LICENSE
+7b8f10764d9a2d3fe90ae3c0da482694 *NAMESPACE
+ae46bc24384591452234f186562ca454 *R/exec.R
+936607224725121f704eada6d7baba2d *man/exec.Rd
+12d6ac705deaec0ced9dbf89083d8f37 *src/exec.c
+22ceb293d92f33e9e17acf092ad592ee *src/unix/exec.c
+5b67a7cf3de01ef049c1e1afa5550435 *src/win32/exec.c
+7e95dde88a7eec2a10cb0bead876a6bc *tests/testthat.R
+e7120c55fd5ea95f1e379b7d8ca89cb4 *tests/testthat/test-binary.R
+1e5659000360c7bce63ba3542d6b7244 *tests/testthat/test-error.R
+bf3390bd37d84ca942012083eee15cea *tests/testthat/test-stdout.R
