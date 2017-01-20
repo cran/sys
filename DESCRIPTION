@@ -1,7 +1,7 @@
 Package: sys
 Type: Package
 Title: Portable System Utilities
-Version: 1.0
+Version: 1.1
 Author: Jeroen Ooms
 Maintainer: Jeroen Ooms <jeroen.ooms@stat.ucla.edu>
 Description: Powerful replacements for base system2 with consistent behavior across
@@ -15,6 +15,6 @@ LazyData: true
 RoxygenNote: 5.0.1.9000
 Suggests: testthat
 NeedsCompilation: yes
-Packaged: 2017-01-17 10:46:03 UTC; jeroen
+Packaged: 2017-01-19 17:45:44 UTC; jeroen
 Repository: CRAN
-Date/Publication: 2017-01-17 13:28:24
+Date/Publication: 2017-01-20 10:49:08

@@ -5,10 +5,39 @@
 #include <signal.h>
 #include <string.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <poll.h>
 
 #define IS_STRING(x) (Rf_isString(x) && Rf_length(x))
 #define IS_TRUE(x) (Rf_isLogical(x) && Rf_length(x) && asLogical(x))
 #define IS_FALSE(x) (Rf_isLogical(x) && Rf_length(x) && !asLogical(x))
+
+/* check for system errors */
+void bail_if(int err, const char * what){
+  if(err)
+    Rf_errorcall(R_NilValue, "System failure for: %s (%s)", what, strerror(errno));
+}
+
+void warn_if(int err, const char * what){
+  if(err)
+    Rf_warningcall(R_NilValue, "System failure for: %s (%s)", what, strerror(errno));
+}
+
+void check_child_success(int fd, int timeout_ms, const char * cmd){
+  int child_errno = 0;
+  struct pollfd ufds[1];
+  ufds[0].fd = fd;
+  ufds[0].events = POLLIN;
+  int res = poll(ufds, 1, timeout_ms);
+  bail_if(res < 0, "poll() on failure pipe");
+  if(ufds[0].revents & POLLERR) Rprintf("POLLERR in poll()\n");
+  if(ufds[0].revents & POLLNVAL) Rprintf("POLLNVAL in poll()\n");
+  if(ufds[0].revents & POLLIN)
+    bail_if(read(fd, &child_errno, sizeof(child_errno)) < 0, "read() failure pipe");
+  close(fd);
+  if(child_errno)
+    Rf_errorcall(R_NilValue, "Failed to execute '%s' (%s)", cmd, strerror(child_errno));
+}
 
 /* Check for interrupt without long jumping */
 void check_interrupt_fn(void *dummy) {
@@ -34,35 +63,36 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
   int block = asLogical(wait);
   int pipe_out[2];
   int pipe_err[2];
+  int failure[2];
 
   //create pipes only in blocking mode
-  if(block){
-    if(pipe(pipe_out) || pipe(pipe_err))
-      Rf_errorcall(R_NilValue, "Failed to create pipe");
-  }
+  if(block)
+    bail_if(pipe(pipe_out) || pipe(pipe_err), "create pipe");
+
+  //setup failure pipe
+  bail_if(pipe(failure), "pipe(failure)");
 
   //fork the main process
   pid_t pid = fork();
-  if(pid < 0)
-    Rf_errorcall(R_NilValue, "Failed to fork");
+  bail_if(pid < 0, "fork()");
 
   //CHILD PROCESS
   if(pid == 0){
     if(block){
       // send stdout to the pipe
-      dup2(pipe_out[1], STDOUT_FILENO);
+      bail_if(dup2(pipe_out[1], STDOUT_FILENO) < 0, "dup2() stdout");
       close(pipe_out[0]);
       close(pipe_out[1]);
 
       //send stderr to the pipe
-      dup2(pipe_err[1], STDERR_FILENO);
+      bail_if(dup2(pipe_err[1], STDERR_FILENO) < 0, "dup2() stderr");
       close(pipe_err[0]);
       close(pipe_err[1]);
     } else {
       if(IS_STRING(outfun)){
         const char * file = CHAR(STRING_ELT(outfun, 0));
         int fd = open(file, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-        dup2(fd, STDOUT_FILENO);
+        bail_if(dup2(fd, STDOUT_FILENO) < 0, "dup2() stdout");
         close(fd);
       } else if(!IS_TRUE(outfun)){
         close(STDOUT_FILENO);
@@ -70,7 +100,7 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
       if(IS_STRING(errfun)){
         const char * file = CHAR(STRING_ELT(errfun, 0));
         int fd = open(file, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-        dup2(fd, STDERR_FILENO);
+        bail_if(dup2(fd, STDERR_FILENO) < 0, "dup2() stderr");
         close(fd);
       } else if(!IS_TRUE(errfun)){
         close(STDERR_FILENO);
@@ -84,7 +114,10 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
     close(STDIN_FILENO);
 
     //close all file descriptors before exit, otherwise they can segfault
-    for (int i = 3; i < sysconf(_SC_OPEN_MAX); i++) close(i);
+    for (int i = 3; i < sysconf(_SC_OPEN_MAX); i++) {
+      if(i != failure[1])
+        close(i);
+    }
 
     //prepare execv
     int len = Rf_length(args);
@@ -95,34 +128,29 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
     }
 
     //execvp never returns if successful
+    close(failure[0]);
     execvp(CHAR(STRING_ELT(command, 0)), (char **) argv);
 
-    // signal is picked up by WTERMSIG() in parent proc
-    raise(SIGHUP);
+    //execvp failed! Send errno to parent
+    warn_if(write(failure[1], &errno, sizeof(errno)) < 0, "write to failure pipe");
+    close(failure[1]);
 
-    //not allowed by CRAN. raise() should suffice
+    //exit() not allowed by CRAN. raise() should suffice
     //exit(EXIT_FAILURE);
-
-    //should never happen
-    return NULL;
+    raise(SIGKILL);
   }
 
   //PARENT PROCESS:
+  close(failure[1]);
   int status = 0;
 
-  //non blocking mode: wait for 0.5 sec for possible SIGHUP from child
+  //non blocking mode: wait for 0.5 sec for possible error from child
   if(!block){
-    for(int i = 0; i < 50; i++){
-      if(waitpid(pid, &status, WNOHANG))
-        break;
-      usleep(10000);
-    }
-    if(WTERMSIG(status) == SIGHUP)
-      Rf_errorcall(R_NilValue, "Failed to execute '%s'", CHAR(STRING_ELT(command, 0)));
+    check_child_success(failure[0], 500, CHAR(STRING_ELT(command, 0)));
     return ScalarInteger(pid);
   }
 
-  //close write end of pipe
+  //blocking: close write end of IO pipes
   close(pipe_out[1]);
   close(pipe_err[1]);
 
@@ -135,8 +163,7 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
   while (waitpid(pid, &status, WNOHANG) >= 0){
     if(pending_interrupt()){
       //pass interrupt to child
-      kill(pid, SIGINT);
-      //picked up below
+      warn_if(kill(pid, SIGINT), "kill child");
     }
     //make sure to empty the pipes, even if fun == NULL
     ssize_t len;
@@ -145,14 +172,15 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
     while ((len = read(pipe_err[0], buffer, sizeof(buffer))) > 0)
       R_callback(errfun, buffer, len);
   }
-  close(pipe_out[0]);
-  close(pipe_err[0]);
+  warn_if(close(pipe_out[0]), "close stdout");
+  warn_if(close(pipe_err[0]), "close stderr");
+
+  //check that execvp was successful
+  check_child_success(failure[0], 0, CHAR(STRING_ELT(command, 0)));
   if(WIFEXITED(status)){
     return ScalarInteger(WEXITSTATUS(status));
   } else {
     int signal = WTERMSIG(status);
-    if(signal == SIGHUP)
-      Rf_errorcall(R_NilValue, "Failed to execute '%s'", CHAR(STRING_ELT(command, 0)));
     if(signal != 0)
       Rf_errorcall(R_NilValue, "Program '%s' terminated by SIGNAL (%s)", CHAR(STRING_ELT(command, 0)), strsignal(signal));
     Rf_errorcall(R_NilValue, "Program terminated abnormally");
