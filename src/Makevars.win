@@ -1,0 +1,6 @@
+OBJECTS = win32/exec.o win32/init.o freeze.o
+
+all: clean
+
+clean:
+	rm -f $(SHLIB) $(OBJECTS)

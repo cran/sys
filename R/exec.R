@@ -13,10 +13,13 @@
 #' below for details.
 #'
 #' The `exec_background` function starts the program and immediately returns the
-#' PID of the child process. Because this is non-blocking, `std_out` and `std_out`
-#' can only be `TRUE`/`FALSE` or a file path. The state of the process is not
-#' controlled by R but the child can be killed manually with [tools::pskill]. This
-#' is useful for running a server daemon or background process.
+#' PID of the child process. This is useful for running a server daemon or background
+#' process.
+#' Because this is non-blocking, `std_out` and `std_out` can only be `TRUE`/`FALSE` or
+#' a file path. The state of the process can be checked with `exec_status` which
+#' returns the exit status, or `NA` if the process is still running. If `wait = TRUE`
+#' then `exec_status` blocks until the process completes (but can be interrupted).
+#' The child can be killed with [tools::pskill].
 #'
 #' The `exec_internal` function is a convenience wrapper around `exec_wait` which
 #' automatically captures output streams and raises an error if execution fails.
@@ -62,6 +65,24 @@
 #' @param std_err if and where to direct child process `STDERR`. Must be one of
 #' `TRUE`, `FALSE`, filename, connection object or callback function. See section
 #' on *Output Streams* below for details.
+#' @examples # Run a command (interrupt with CTRL+C)
+#' status <- exec_wait("date")
+#'
+#' # Capture std/out
+#' out <- exec_internal("date")
+#' print(out$status)
+#' cat(rawToChar(out$stdout))
+#'
+#' # Run a background process (daemon)
+#' pid <- exec_background("ping", "localhost")
+#'
+#' # Kill it after a while
+#' Sys.sleep(2)
+#' tools::pskill(pid)
+#'
+#' # Cleans up the zombie proc
+#' exec_status(pid)
+#' rm(pid)
 exec_wait <- function(cmd, args = NULL, std_out = stdout(), std_err = stderr()){
   # Convert TRUE or filepath into connection objects
   std_out <- if(isTRUE(std_out) || identical(std_out, "")){
@@ -140,6 +161,15 @@ exec_internal <- function(cmd, args = NULL, error = TRUE){
     stdout = rawConnectionValue(outcon),
     stderr = rawConnectionValue(errcon)
   )
+}
+
+#' @export
+#' @rdname exec
+#' @useDynLib sys R_exec_status
+#' @param pid integer with a process ID
+#' @param wait block until the process completes
+exec_status <- function(pid, wait = TRUE){
+  .Call(R_exec_status, pid, wait)
 }
 
 #' @useDynLib sys C_execute
