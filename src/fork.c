@@ -8,49 +8,36 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <time.h>
+#include <errno.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 
-static int out = STDOUT_FILENO;
-static int err = STDERR_FILENO;
+static const int R_DefaultSerializeVersion = 2;
 
 #define r 0
 #define w 1
-extern Rboolean R_isForkedChild;
-void safe_close(int fd);
-extern void warn_if(int err, const char * what);
-extern void bail_if(int err, const char * what);
-extern void set_pipe(int input, int output[2]);
-extern int wait_for_action2(int fd1, int fd2);
-extern void pipe_set_read(int pipe[2]);
-extern void print_output(int pipe_out[2], SEXP fun);
-extern int pending_interrupt();
-extern char * Sys_TempDir;
-
-//output callbacks
-void write_out_ex(const char * buf, int size, int otype){
-  warn_if(write(otype ? err : out, buf, size), "problem writing back to std_out / std_err");
-}
-
-#define MAX(x, y) (((x) > (y)) ? (x) : (y))
-#define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 #define waitms 200
-static const int R_DefaultSerializeVersion = 2;
 
-static int wait_for_action1(int fd, int ms){
+extern Rboolean R_isForkedChild;
+extern char * Sys_TempDir;
+extern void bail_if(int err, const char * what);
+extern void warn_if(int err, const char * what);
+extern void safe_close(int fd);
+extern void set_pipe(int input, int output[2]);
+extern void pipe_set_read(int pipe[2]);
+extern void check_interrupt_fn(void *dummy);
+extern int pending_interrupt();
+extern int wait_for_action2(int fd1, int fd2);
+extern void print_output(int pipe_out[2], SEXP fun);
+
+static int wait_with_timeout(int fd, int ms){
   short events = POLLIN | POLLERR | POLLHUP;
   struct pollfd ufds = {fd, events, 0};
   if(poll(&ufds, 1, ms) > 0)
     return ufds.revents;
   return 0;
 }
-
-/*
-static int is_alive(pid_t pid){
-  return !waitpid(pid, NULL, WNOHANG);
-}
-*/
 
 /* Callback functions to serialize/unserialize via the pipe */
 static void OutBytesCB(R_outpstream_t stream, void * raw, int size){
@@ -97,10 +84,34 @@ static void serialize_to_pipe(SEXP object, int results[2]){
   R_Serialize(object, &stream);
 }
 
-void prepare_fork(const char * tmpdir){
-#ifndef R_SYS_BUILD_CLEAN
+int Fake_ReadConsole(const char * a, unsigned char * b, int c, int d){
+  return 0;
+}
+
+void My_R_Flush(){
+
+}
+
+/* do not wipe (shared) tempdir or run finalizers in forked process */
+void My_R_CleanUp (SA_TYPE saveact, int status, int RunLast){
+#ifdef SYS_BUILD_SAFE
+  //R_RunExitFinalizers();
+  Rf_KillAllDevices();
+#endif
+}
+
+/* disables console, finalizers, interactivity inside forked procs */
+void prepare_fork(const char * tmpdir, int fd_out, int fd_err){
+#ifdef SYS_BUILD_SAFE
+  //either set R_Outputfile+R_Consolefile OR ptr_R_WriteConsoleEx()
+  R_Outputfile = fdopen(fd_out, "wb");
+  R_Consolefile = fdopen(fd_err, "wb");
   ptr_R_WriteConsole = NULL;
-  ptr_R_WriteConsoleEx = write_out_ex;
+  ptr_R_WriteConsoleEx = NULL;
+  ptr_R_ResetConsole = My_R_Flush;
+  ptr_R_FlushConsole = My_R_Flush;
+  ptr_R_ReadConsole = Fake_ReadConsole;
+  ptr_R_CleanUp = My_R_CleanUp;
   R_isForkedChild = 1;
   R_Interactive = 0;
   R_TempDir = strdup(tmpdir);
@@ -140,16 +151,19 @@ SEXP R_eval_fork(SEXP call, SEXP env, SEXP subtmp, SEXP timeout, SEXP outfun, SE
     //prevents signals from being propagated to fork
     setpgid(0, 0);
 
-    //this is the hacky stuff
-    out = pipe_out[w];
-    err = pipe_err[w];
-    prepare_fork(CHAR(STRING_ELT(subtmp, 0)));
-
     //close read pipe
     close(results[r]);
 
     //This breaks parallel! See issue #11
     safe_close(STDIN_FILENO);
+
+    //Linux only: commit suicide when parent dies
+#ifdef PR_SET_PDEATHSIG
+    prctl(PR_SET_PDEATHSIG, SIGKILL);
+#endif
+
+    //this is the hacky stuff
+    prepare_fork(CHAR(STRING_ELT(subtmp, 0)), pipe_out[w], pipe_err[w]);
 
     //execute
     fail = 99; //not using this yet
@@ -186,11 +200,11 @@ SEXP R_eval_fork(SEXP call, SEXP env, SEXP subtmp, SEXP timeout, SEXP outfun, SE
     if(is_timeout || pending_interrupt()){
       //looks like rstudio always does SIGKILL, regardless
       warn_if(kill(pid, killcount == 0 ? SIGINT : killcount == 1 ? SIGTERM : SIGKILL), "kill child");
-      status = wait_for_action1(results[r], 500);
+      status = wait_with_timeout(results[r], 500);
       killcount++;
     } else {
       wait_for_action2(pipe_out[r], pipe_err[r]);
-      status = wait_for_action1(results[r], 0);
+      status = wait_with_timeout(results[r], 0);
 
       //empty pipes
       print_output(pipe_out, outfun);

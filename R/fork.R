@@ -1,18 +1,31 @@
-#' Evaluate in fork
+#' Safe Evaluation
 #'
-#' Version of [eval] which evaluates expression in a temporary fork so that it has no side
-#' effects on the main R session, similar to `mccollect(mcparallel(expr))`. In [eval_safe]
-#' the expression is wrapped in additional R code to catch errors, close graphics devices,
-#' etc. Not available on Windows because it requires `fork()`.
+#' Evaluates an expression in a temporary fork and returns the value without any
+#' side effects on the main R session. For [eval_safe()] the expression is wrapped
+#' in additional R code to handle errors and graphics.
+#'
+#' Some programs such as `Java` are not fork-safe and cannot be called from within a
+#' forked process if they have already been loaded in the main process. On MacOS any
+#' software calling `CoreFoundation` functionality might crash within the fork. This
+#' includes `libcurl` which has been built on OSX against native SecureTransport rather
+#' than OpenSSL for https connections. The same limitations hold for e.g. `parallel::mcparallel()`.
 #'
 #' @export
 #' @rdname eval_fork
 #' @inheritParams exec
+#' @importFrom grDevices pdf dev.cur dev.off
 #' @param expr expression to evaluate
-#' @param envir the [environment] in which expr is to be evaluated
-#' @param tmp the value of [tempdir] inside the forked process
+#' @param tmp the value of [tempdir()] inside the forked process
 #' @param timeout maximum time in seconds to allow for call to return
-#' @examples # Not available on Windows
+#' @param device graphics device to use in the fork, see [dev.new()]
+#' @param rlimits named vector/list with rlimit values, for example: `c(cpu = 60, fsize = 1e6)`.
+#' @param uid evaluate as given user (uid or name). See [unix::setuid()], only for root.
+#' @param gid evaluate as given group (gid or name). See [unix::setgid()] only for root.
+#' @param priority (integer) priority of the child process. High value is low priority.
+#' Non root user may only raise this value (decrease priority)
+#' @param profile AppArmor profile, see `RAppArmor::aa_change_profile()`.
+#' Requires the `RAppArmor` package (Debian/Ubuntu only)
+#' @examples #Only works on Unix
 #' if(.Platform$OS.type == "unix"){
 #'
 #' # works like regular eval:
@@ -30,10 +43,45 @@
 #' # Capture output
 #' outcon <- rawConnection(raw(0), "r+")
 #' eval_safe(print(sessionInfo()), std_out = outcon)
-#' rawToChar(rawConnectionValue(outcon))
+#' cat(rawToChar(rawConnectionValue(outcon)))
 #' }
-eval_fork <- function(expr, envir = parent.frame(), tmp = tempfile("fork"), timeout = 60,
-                      std_out = stdout(), std_err = stderr()){
+eval_safe <- function(expr, tmp = tempfile("fork"), std_out = stdout(), std_err = stderr(),
+                      timeout = 0, priority = NULL, uid = NULL, gid = NULL, rlimits = NULL,
+                      profile = NULL, device = pdf){
+  orig_expr <- substitute(expr)
+  out <- eval_fork(expr = tryCatch({
+    if(length(priority))
+      set_priority(priority)
+    if(length(rlimits))
+      set_rlimits(rlimits)
+    if(length(gid))
+      setgid(gid)
+    if(length(uid))
+      setuid(uid)
+    if(length(profile))
+      aa_change_profile(profile)
+    if(length(device))
+      options(device = device)
+    while(dev.cur() > 1) dev.off()
+    options(menu.graphics = FALSE)
+    withVisible(eval(orig_expr, parent.frame()))
+  }, error = function(e){
+    old_class <- attr(e, "class")
+    structure(e, class = c(old_class, "eval_fork_error"))
+  }, finally = substitute(while(dev.cur() > 1) dev.off())),
+  tmp = tmp, timeout = timeout, std_out = std_out, std_err = std_err)
+  if(inherits(out, "eval_fork_error"))
+    base::stop(out)
+  if(out$visible)
+    out$value
+  else
+    invisible(out$value)
+}
+
+
+#' @rdname eval_fork
+#' @export
+eval_fork <- function(expr, tmp = tempfile("fork"), std_out = stdout(), std_err = stderr(), timeout = 0) {
   # Convert TRUE or filepath into connection objects
   std_out <- if(isTRUE(std_out) || identical(std_out, "")){
     stdout()
@@ -82,52 +130,31 @@ eval_fork <- function(expr, envir = parent.frame(), tmp = tempfile("fork"), time
       }
     }
   }
-  if(!file.exists(tmp))
-    dir.create(tmp)
-  clenv <- force(envir)
+  clenv <- force(parent.frame())
   clexpr <- substitute(expr)
-  eval_fork_internal(clexpr, clenv, tmp, timeout, outfun, errfun)
-}
-
-#' @rdname eval_fork
-#' @export
-#' @importFrom grDevices pdf
-#' @param device graphics device to use in the fork, see [options]
-eval_safe <- function(expr, envir = parent.frame(), tmp = tempfile("fork"), timeout = 60,
-                      std_out = stdout(), std_err = stderr(), device = pdf){
-  orig_expr <- substitute(expr)
-  safe_expr <- call('tryCatch', call('{',
-    if(length(device))
-      call('options', device = device),
-    substitute(while(dev.cur() > 1) dev.off()),
-    substitute(options(menu.graphics = FALSE)),
-    substitute(FORK_EXPR_RESULT <- withVisible(orig_expr)),
-    substitute(while(dev.cur() > 1) dev.off()),
-    substitute(FORK_EXPR_RESULT)
-  ), error = function(e){
-    old_class <- attr(e, "class")
-    structure(e, class = c(old_class, "eval_fork_error"))
-  })
-  out <- eval(call('eval_fork', expr = safe_expr, envir = envir, tmp = tmp,
-                   timeout = timeout, std_out = std_out, std_err = std_err))
-  if(inherits(out, "eval_fork_error")){
-    base::stop(out)
-  }
-  if(out$visible)
-    out$value
-  else
-    invisible(out$value)
+  eval_fork_internal(expr = clexpr, envir = clenv, tmp = tmp, timeout = timeout, outfun = outfun,
+    errfun = errfun)
 }
 
 #' @useDynLib sys R_eval_fork
 eval_fork_internal <- function(expr, envir, tmp, timeout, outfun, errfun){
-  timeout <- as.numeric(timeout)
+  if(!file.exists(tmp))
+    dir.create(tmp)
+  if(length(timeout)){
+    stopifnot(is.numeric(timeout))
+  } else {
+    timeout <- as.numeric(0)
+  }
   tmp <- normalizePath(tmp)
   .Call(R_eval_fork, expr, envir, tmp, timeout, outfun, errfun)
 }
 
-#' @useDynLib sys R_freeze
-freeze <- function(interrupt = TRUE){
-  interrupt = as.logical(interrupt)
-  .Call(R_freeze, interrupt)
+# Limits MUST be named
+parse_limits <- function(..., as = NA, core = NA, cpu = NA, data = NA, fsize = NA,
+                         memlock = NA, nofile = NA, nproc = NA, stack = NA){
+  unknown <- list(...)
+  if(length(unknown))
+    stop("Unsupported rlimits: ", paste(names(unknown), collapse = ", "))
+  out <- as.numeric(c(as, core, cpu, data, fsize, memlock, nofile, nproc, stack))
+  structure(out, names = names(formals(sys.function()))[-1])
 }
