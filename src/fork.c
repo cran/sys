@@ -12,6 +12,10 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
+
 static const int R_DefaultSerializeVersion = 2;
 
 #define r 0
@@ -30,6 +34,7 @@ extern void check_interrupt_fn(void *dummy);
 extern int pending_interrupt();
 extern int wait_for_action2(int fd1, int fd2);
 extern void print_output(int pipe_out[2], SEXP fun);
+extern void kill_process_group(int signum);
 
 static int wait_with_timeout(int fd, int ms){
   short events = POLLIN | POLLERR | POLLHUP;
@@ -157,9 +162,10 @@ SEXP R_eval_fork(SEXP call, SEXP env, SEXP subtmp, SEXP timeout, SEXP outfun, SE
     //This breaks parallel! See issue #11
     safe_close(STDIN_FILENO);
 
-    //Linux only: commit suicide when parent dies
+    //Linux only: try to kill proccess group when parent dies
 #ifdef PR_SET_PDEATHSIG
-    prctl(PR_SET_PDEATHSIG, SIGKILL);
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+    signal(SIGTERM, kill_process_group);
 #endif
 
     //this is the hacky stuff

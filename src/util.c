@@ -3,6 +3,9 @@
 #include <R_ext/Rdynload.h>
 #include <string.h>
 
+//Because mkString() segfaulst for NULL
+#define make_string(x) x ? Rf_mkString(x) : ScalarString(NA_STRING)
+
 //Define in exec.c
 extern void bail_if(int err, const char * what);
 extern int pending_interrupt();
@@ -17,7 +20,7 @@ extern int pending_interrupt();
 #include <unistd.h>
 #include <sys/resource.h>
 
-// Order should match the R function
+// Missing on Solaris
 #ifndef RLIMIT_NPROC
 #define RLIMIT_NPROC -1
 #endif
@@ -26,6 +29,12 @@ extern int pending_interrupt();
 #define RLIMIT_MEMLOCK -1
 #endif
 
+// Missing on OpenBSD
+#ifndef RLIMIT_AS
+#define RLIMIT_AS RLIMIT_DATA
+#endif
+
+// Order should match the R function
 static int rlimit_types[9] = {
   RLIMIT_AS, //0
   RLIMIT_CORE, //1
@@ -97,6 +106,26 @@ SEXP R_aa_change_profile(SEXP profile){
   bail_if(aa_change_profile (profstr) < 0, "aa_change_profile()");
 #endif
   return R_NilValue;
+}
+
+SEXP R_aa_is_enabled(){
+#ifndef HAVE_APPARMOR
+  return R_NilValue;
+#else
+  return ScalarLogical(aa_is_enabled());
+#endif //HAVE_APPARMOR
+}
+
+SEXP R_aa_getcon(){
+#ifndef HAVE_APPARMOR
+  return R_NilValue;
+#else
+  char * con = NULL;
+  char * mode = NULL;
+  if(!aa_getcon (&con, &mode))
+    return R_NilValue;
+  return Rf_list2(make_string(con), make_string(mode));
+#endif //HAVE_APPARMOR
 }
 
 /*** Below are UNIX only tools ***/
