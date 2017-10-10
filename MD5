@@ -1,7 +1,7 @@
-fc6373b6e5a739382b6ae4ca54068dd1 *DESCRIPTION
+b094f67f435e8ca068d5388278a55036 *DESCRIPTION
 1ee0683cce6d3479250337954c075d63 *LICENSE
 53d1d7abcc0cba7db1708e4ae8623ff5 *NAMESPACE
-7dfde5025f3d5da3982ff15fd203eb01 *NEWS
+c8755fa595ede0738aea8e7e89ac9429 *NEWS
 da9f868f5e157c5e9daf3b5fcaf6dacb *R/exec.R
 d65e56e4a4136061983fb9f6ff71d600 *R/fork.R
 fad6da02c7106cb917f45659593e80a5 *R/util.R
@@ -14,8 +14,8 @@ b9dbb038f544f79eea2b4f8778046380 *src/Makevars.in
 f70960f70dc1158c01ca2e869070044c *src/Makevars.win
 823fffaffea2de2386cc929117936a5d *src/exec.c
 629e76e0c189ba271d9e7ef002df799d *src/fork.c
-332f434e3168399c11d18285a7636c64 *src/util.c
-dd398dc29d44c6287441b4ad1a64d010 *src/win32/exec.c
+9afa5aa948e874594ebdf16c1b5e72c0 *src/util.c
+f09f8a6d1002524d57b2df73966a41eb *src/win32/exec.c
 7e95dde88a7eec2a10cb0bead876a6bc *tests/testthat.R
 e7120c55fd5ea95f1e379b7d8ca89cb4 *tests/testthat/test-binary.R
 59898b294ce7b553c9cc58a19426a290 *tests/testthat/test-error.R
