@@ -74,19 +74,38 @@ static int InCharCB(R_inpstream_t stream){
   return val;
 }
 
+static SEXP unserialize_from_pipe(int results[2]){
+  //unserialize stream
+  struct R_inpstream_st stream;
+  R_InitInPStream(&stream, results, R_pstream_xdr_format, InCharCB, InBytesCB, NULL,  R_NilValue);
+  return R_Unserialize(&stream);
+}
+
 static void serialize_to_pipe(SEXP object, int results[2]){
   //serialize output
   struct R_outpstream_st stream;
-  stream.data = results;
-  stream.type = R_pstream_xdr_format;
-  stream.version = R_DefaultSerializeVersion;
-  stream.OutChar = OutCharCB;
-  stream.OutBytes = OutBytesCB;
-  stream.OutPersistHookFunc = NULL;
-  stream.OutPersistHookData = R_NilValue;
-
-  //TODO: this can raise an error so that the process never dies!
+  R_InitOutPStream(&stream, results, R_pstream_xdr_format, R_DefaultSerializeVersion, OutCharCB, OutBytesCB, NULL, R_NilValue);
   R_Serialize(object, &stream);
+}
+
+static void raw_to_pipe(SEXP object, int results[2]){
+  R_xlen_t len = Rf_length(object);
+  bail_if(write(results[w], &len, sizeof(len)) < sizeof(len), "raw_to_pipe: send size-byte");
+  bail_if(write(results[w], RAW(object), len) < len, "raw_to_pipe: send raw data");
+}
+
+SEXP raw_from_pipe(int results[2]){
+  R_xlen_t len = 0;
+  bail_if(read(results[r], &len, sizeof(len)) < sizeof(len), "raw_from_pipe: read size-byte");
+  SEXP out = Rf_allocVector(RAWSXP, len);
+  unsigned char * ptr = RAW(out);
+  while(len > 0){
+    int bufsize = read(results[r], ptr, len);
+    bail_if(bufsize <= 0, "failed to read from buffer");
+    ptr += bufsize;
+    len -= bufsize;
+  }
+  return out;
 }
 
 int Fake_ReadConsole(const char * a, unsigned char * b, int c, int d){
@@ -126,20 +145,6 @@ void prepare_fork(const char * tmpdir, int fd_out, int fd_err){
 #endif
 }
 
-static SEXP unserialize_from_pipe(int results[2]){
-  //unserialize stream
-  struct R_inpstream_st stream;
-  stream.data = results;
-  stream.type = R_pstream_xdr_format;
-  stream.InPersistHookFunc = NULL;
-  stream.InPersistHookData = R_NilValue;
-  stream.InBytes = InBytesCB;
-  stream.InChar = InCharCB;
-
-  //TODO: this can raise an error!
-  return R_Unserialize(&stream);
-}
-
 SEXP R_eval_fork(SEXP call, SEXP env, SEXP subtmp, SEXP timeout, SEXP outfun, SEXP errfun){
   int results[2];
   int pipe_out[2];
@@ -175,10 +180,20 @@ SEXP R_eval_fork(SEXP call, SEXP env, SEXP subtmp, SEXP timeout, SEXP outfun, SE
     fail = 99; //not using this yet
     SEXP object = R_tryEval(call, env, &fail);
 
+    //special case of raw vector
+    if(fail == 0 && object != NULL && TYPEOF(object) == RAWSXP)
+      fail = 1985;
+
     //try to send the 'success byte' and then output
     if(write(results[w], &fail, sizeof(fail)) > 0){
-      const char * errbuf = R_curErrorBuf();
-      serialize_to_pipe(fail || object == NULL ? mkString(errbuf ? errbuf : "unknown error in child") : object, results);
+      if(fail == 1985){
+        raw_to_pipe(object, results);
+      } else if(fail == 0 && object){
+        serialize_to_pipe(object, results);
+      } else {
+        const char * errbuf = R_curErrorBuf();
+        serialize_to_pipe(mkString(errbuf ? errbuf : "unknown error in child"), results);
+      }
     }
 
     //suicide
@@ -230,7 +245,12 @@ SEXP R_eval_fork(SEXP call, SEXP env, SEXP subtmp, SEXP timeout, SEXP outfun, SE
     int child_is_alive = read(results[r], &fail, sizeof(fail));
     bail_if(child_is_alive < 0, "read pipe");
     if(child_is_alive > 0){
-      res = unserialize_from_pipe(results);
+      if(fail == 0){
+        res = unserialize_from_pipe(results);
+      } else if(fail == 1985){
+        res = raw_from_pipe(results);
+        fail = 0;
+      }
     }
   }
 

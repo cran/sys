@@ -27,6 +27,19 @@ test_that("eval_fork works", {
   }
 })
 
+test_that("eval_fork serializes large payloads", {
+  skip_on_os("windows")
+
+  for(i in 1:10){
+    x <- rnorm(round(runif(1, 1e5, 1e6)))
+    rawvec <- serialize(x, NULL)
+    expect_equal(x, eval_fork(x))
+    expect_equal(x, eval_safe(x))
+    expect_equal(rawvec, eval_fork(rawvec))
+    expect_equal(rawvec, eval_safe(rawvec))
+  }
+})
+
 
 test_that("eval_fork gives errors", {
   skip_on_os("windows")
