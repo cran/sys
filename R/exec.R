@@ -3,6 +3,10 @@
 #' Powerful replacements for [system2] with support for interruptions, background
 #' tasks and fine grained control over `STDOUT` / `STDERR` binary or text streams.
 #'
+#' Each value within the `args` vector will automatically be quoted when needed;
+#' you should not quote arguments yourself. Doing so anyway could lead to the value
+#' being quoted twice on some platforms.
+#'
 #' The `exec_wait` function runs a system command and waits for the child process
 #' to exit. When the child process completes normally (either success or error) it
 #' returns with the program exit code. Otherwise (if the child process gets aborted)
@@ -55,16 +59,20 @@
 #' @aliases sys
 #' @seealso Base [system2] and [pipe] provide other methods for running a system
 #' command with output.
+#' @family sys
 #' @rdname exec
-#' @param cmd the command to run. Either a full path or the name of a program
-#' which exists in the `PATH`.
-#' @param args character vector of arguments to pass
+#' @param cmd the command to run. Either a full path or the name of a program on
+#' the `PATH`. On Windows this is automatically converted to a short path using
+#' [Sys.which], unless wrapped in [I()].
+#' @param args character vector of arguments to pass. On Windows these automatically
+#' get quoted using [windows_quote], unless the value is wrapped in [I()].
 #' @param std_out if and where to direct child process `STDOUT`. Must be one of
 #' `TRUE`, `FALSE`, filename, connection object or callback function. See section
 #' on *Output Streams* below for details.
 #' @param std_err if and where to direct child process `STDERR`. Must be one of
 #' `TRUE`, `FALSE`, filename, connection object or callback function. See section
 #' on *Output Streams* below for details.
+#' @param std_in file path to map std_in
 #' @examples # Run a command (interrupt with CTRL+C)
 #' status <- exec_wait("date")
 #'
@@ -86,7 +94,7 @@
 #' exec_status(pid)
 #' rm(pid)
 #' }
-exec_wait <- function(cmd, args = NULL, std_out = stdout(), std_err = stderr()){
+exec_wait <- function(cmd, args = NULL, std_out = stdout(), std_err = stderr(), std_in = NULL){
   # Convert TRUE or filepath into connection objects
   std_out <- if(isTRUE(std_out) || identical(std_out, "")){
     stdout()
@@ -135,28 +143,28 @@ exec_wait <- function(cmd, args = NULL, std_out = stdout(), std_err = stderr()){
       }
     }
   }
-  execute(cmd, args, outfun, errfun, wait = TRUE)
+  execute(cmd, args, outfun, errfun, wait = TRUE, std_in)
 }
 
 #' @export
 #' @rdname exec
-exec_background <- function(cmd, args = NULL, std_out = TRUE, std_err = TRUE){
+exec_background <- function(cmd, args = NULL, std_out = TRUE, std_err = TRUE, std_in = NULL){
   if(!is.character(std_out) && !is.logical(std_out))
     stop("argument 'std_out' must be TRUE / FALSE or a filename")
   if(!is.character(std_err) && !is.logical(std_err))
     stop("argument 'std_err' must be TRUE / FALSE or a filename")
-  execute(cmd, args, std_out, std_err, wait = FALSE)
+  execute(cmd, args, std_out, std_err, wait = FALSE, std_in)
 }
 
 #' @export
 #' @rdname exec
 #' @param error automatically raise an error if the exit status is non-zero.
-exec_internal <- function(cmd, args = NULL, error = TRUE){
+exec_internal <- function(cmd, args = NULL, std_in = NULL, error = TRUE){
   outcon <- rawConnection(raw(0), "r+")
   on.exit(close(outcon), add = TRUE)
   errcon <- rawConnection(raw(0), "r+")
   on.exit(close(errcon), add = TRUE)
-  status <- exec_wait(cmd, args, std_out = outcon, std_err = errcon)
+  status <- exec_wait(cmd, args, std_out = outcon, std_err = errcon, std_in = std_in)
   if(isTRUE(error) && !identical(status, 0L))
     stop(sprintf("Executing '%s' failed with status %d", cmd, status))
   list(
@@ -176,9 +184,24 @@ exec_status <- function(pid, wait = TRUE){
 }
 
 #' @useDynLib sys C_execute
-execute <- function(cmd, args, std_out, std_err, wait){
+execute <- function(cmd, args, std_out, std_err, wait, std_in){
   stopifnot(is.character(cmd))
+  if(.Platform$OS.type == 'windows'){
+    if(!inherits(cmd, 'AsIs'))
+      cmd <- to_shortpath(cmd)
+    if(!inherits(args, 'AsIs'))
+      args <- windows_quote(args)
+  }
   stopifnot(is.logical(wait))
-  argv <- c(cmd, as.character(args))
-  .Call(C_execute, cmd, argv, std_out, std_err, wait)
+  argv <- enc2utf8(c(cmd, args))
+  if(length(std_in)) # Only files supported for stdin
+    std_in <- enc2utf8(normalizePath(std_in, mustWork = TRUE))
+  .Call(C_execute, cmd, argv, std_out, std_err, wait, std_in)
+}
+
+to_shortpath <- function(path){
+  out <- Sys.which(path)
+  if(nchar(out))
+    return(out)
+  return(path)
 }

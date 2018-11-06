@@ -9,19 +9,23 @@
 \alias{exec_status}
 \title{Running System Commands}
 \usage{
-exec_wait(cmd, args = NULL, std_out = stdout(), std_err = stderr())
+exec_wait(cmd, args = NULL, std_out = stdout(), std_err = stderr(),
+  std_in = NULL)
 
-exec_background(cmd, args = NULL, std_out = TRUE, std_err = TRUE)
+exec_background(cmd, args = NULL, std_out = TRUE, std_err = TRUE,
+  std_in = NULL)
 
-exec_internal(cmd, args = NULL, error = TRUE)
+exec_internal(cmd, args = NULL, std_in = NULL, error = TRUE)
 
 exec_status(pid, wait = TRUE)
 }
 \arguments{
-\item{cmd}{the command to run. Either a full path or the name of a program
-which exists in the \code{PATH}.}
+\item{cmd}{the command to run. Either a full path or the name of a program on
+the \code{PATH}. On Windows this is automatically converted to a short path using
+\link{Sys.which}, unless wrapped in \code{\link[=I]{I()}}.}
 
-\item{args}{character vector of arguments to pass}
+\item{args}{character vector of arguments to pass. On Windows these automatically
+get quoted using \link{windows_quote}, unless the value is wrapped in \code{\link[=I]{I()}}.}
 
 \item{std_out}{if and where to direct child process \code{STDOUT}. Must be one of
 \code{TRUE}, \code{FALSE}, filename, connection object or callback function. See section
@@ -30,6 +34,8 @@ on \emph{Output Streams} below for details.}
 \item{std_err}{if and where to direct child process \code{STDERR}. Must be one of
 \code{TRUE}, \code{FALSE}, filename, connection object or callback function. See section
 on \emph{Output Streams} below for details.}
+
+\item{std_in}{file path to map std_in}
 
 \item{error}{automatically raise an error if the exit status is non-zero.}
 
@@ -46,6 +52,10 @@ Powerful replacements for \link{system2} with support for interruptions, backgro
 tasks and fine grained control over \code{STDOUT} / \code{STDERR} binary or text streams.
 }
 \details{
+Each value within the \code{args} vector will automatically be quoted when needed;
+you should not quote arguments yourself. Doing so anyway could lead to the value
+being quoted twice on some platforms.
+
 The \code{exec_wait} function runs a system command and waits for the child process
 to exit. When the child process completes normally (either success or error) it
 returns with the program exit code. Otherwise (if the child process gets aborted)
@@ -121,4 +131,7 @@ rm(pid)
 \seealso{
 Base \link{system2} and \link{pipe} provide other methods for running a system
 command with output.
+
+Other sys: \code{\link{exec_r}}
 }
+\concept{sys}

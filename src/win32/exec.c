@@ -13,7 +13,7 @@
 
 /* copy from R source */
 
-const char *formatError(DWORD res){
+static const char *formatError(DWORD res){
   static char buf[1000], *p;
   FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                 NULL, res,
@@ -30,18 +30,18 @@ const char *formatError(DWORD res){
 
 
 /* check for system errors */
-void bail_if(int err, const char * what){
+static void bail_if(int err, const char * what){
   if(err)
     Rf_errorcall(R_NilValue, "System failure for: %s (%s)", what, formatError(GetLastError()));
 }
 
-void warn_if(int err, const char * what){
+static void warn_if(int err, const char * what){
   if(err)
     Rf_warningcall(R_NilValue, "System failure for: %s (%s)", what, formatError(GetLastError()));
 }
 
 /* Check for interrupt without long jumping */
-void check_interrupt_fn(void *dummy) {
+static void check_interrupt_fn(void *dummy) {
   R_CheckUserInterrupt();
 }
 
@@ -49,7 +49,34 @@ int pending_interrupt() {
   return !(R_ToplevelExec(check_interrupt_fn, NULL));
 }
 
-void R_callback(SEXP fun, const char * buf, ssize_t len){
+static int str_to_wchar(const char * str, wchar_t **wstr){
+  int len = MultiByteToWideChar( CP_UTF8 , 0 , str , -1, NULL , 0 );
+  *wstr = calloc(len, sizeof(*wstr));
+  MultiByteToWideChar( CP_UTF8 , 0 , str , -1, *wstr , len );
+  return len;
+}
+
+static wchar_t* sexp_to_wchar(SEXP args){
+  int total = 1;
+  wchar_t *out = calloc(total, sizeof(*out));
+  wchar_t *space = NULL;
+  int spacelen = str_to_wchar(" ", &space);
+  for(int i = 0; i < Rf_length(args); i++){
+    wchar_t *arg = NULL;
+    const char *str = CHAR(STRING_ELT(args, i));
+    int len = str_to_wchar(str, &arg);
+    total = total + len;
+    out = realloc(out, (total + spacelen) * sizeof(*out));
+    if(wcsncat(out, arg, len) == NULL)
+      Rf_error("Failure in wcsncat");
+    if(i < Rf_length(args) - 1 && wcsncat(out, space, spacelen) == NULL)
+      Rf_error("Failure in wcsncat");
+    free(arg);
+  }
+  return out;
+}
+
+static void R_callback(SEXP fun, const char * buf, ssize_t len){
   if(!isFunction(fun)) return;
   int ok;
   SEXP str = PROTECT(allocVector(RAWSXP, len));
@@ -85,7 +112,7 @@ static DWORD WINAPI PrintErr(HANDLE pipe){
   return PrintPipe(pipe, stderr);
 }
 
-void ReadFromPipe(SEXP fun, HANDLE pipe){
+static void ReadFromPipe(SEXP fun, HANDLE pipe){
   unsigned long len = 1;
   while(1){
     bail_if(!PeekNamedPipe(pipe, NULL, 0, NULL, &len, NULL), "PeekNamedPipe");
@@ -98,19 +125,36 @@ void ReadFromPipe(SEXP fun, HANDLE pipe){
   }
 }
 
-/* Create FD in Windows */
-HANDLE fd(const char * path){
-  SECURITY_ATTRIBUTES sa;
+static HANDLE fd_read(const char *path){
+  SECURITY_ATTRIBUTES sa = {0};
   sa.lpSecurityDescriptor = NULL;
   sa.bInheritHandle = TRUE;
   DWORD dwFlags = FILE_ATTRIBUTE_NORMAL;
-  HANDLE out = CreateFile(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    &sa, CREATE_ALWAYS, dwFlags, NULL);
+  wchar_t *wpath;
+  str_to_wchar(path, &wpath);
+  HANDLE out = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ,
+                          &sa, OPEN_EXISTING, dwFlags, NULL);
+  free(wpath);
   bail_if(out == INVALID_HANDLE_VALUE, "CreateFile");
   return out;
 }
 
-BOOL CALLBACK closeWindows(HWND hWnd, LPARAM lpid) {
+/* Create FD in Windows */
+static HANDLE fd_write(const char * path){
+  SECURITY_ATTRIBUTES sa = {0};
+  sa.lpSecurityDescriptor = NULL;
+  sa.bInheritHandle = TRUE;
+  DWORD dwFlags = FILE_ATTRIBUTE_NORMAL;
+  wchar_t *wpath;
+  str_to_wchar(path, &wpath);
+  HANDLE out = CreateFileW(wpath, GENERIC_WRITE, FILE_SHARE_WRITE,
+                    &sa, CREATE_ALWAYS, dwFlags, NULL);
+  free(wpath);
+  bail_if(out == INVALID_HANDLE_VALUE, "CreateFile");
+  return out;
+}
+
+static BOOL CALLBACK closeWindows(HWND hWnd, LPARAM lpid) {
   DWORD pid = (DWORD)lpid;
   DWORD win;
   GetWindowThreadProcessId(hWnd, &win);
@@ -119,14 +163,14 @@ BOOL CALLBACK closeWindows(HWND hWnd, LPARAM lpid) {
   return TRUE;
 }
 
-void fin_proc(SEXP ptr){
+static void fin_proc(SEXP ptr){
   if(!R_ExternalPtrAddr(ptr)) return;
   CloseHandle(R_ExternalPtrAddr(ptr));
   R_ClearExternalPtr(ptr);
 }
 
 // Keeps one process handle open to let exec_status() read exit code
-SEXP make_handle_ptr(HANDLE proc){
+static SEXP make_handle_ptr(HANDLE proc){
   SEXP ptr = PROTECT(R_MakeExternalPtr(proc, R_NilValue, R_NilValue));
   R_RegisterCFinalizerEx(ptr, fin_proc, 1);
   setAttrib(ptr, R_ClassSymbol, mkString("handle_ptr"));
@@ -134,15 +178,15 @@ SEXP make_handle_ptr(HANDLE proc){
   return ptr;
 }
 
-SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
+SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEXP input){
   int block = asLogical(wait);
   SECURITY_ATTRIBUTES sa;
   sa.nLength = sizeof(sa);
   sa.lpSecurityDescriptor = NULL;
   sa.bInheritHandle = TRUE;
 
-  STARTUPINFO si = {0};
-  si.cb = sizeof(STARTUPINFO);
+  STARTUPINFOW si = {0};
+  si.cb = sizeof(STARTUPINFOW);
   si.dwFlags |= STARTF_USESTDHANDLES;
   HANDLE pipe_out = NULL;
   HANDLE pipe_err = NULL;
@@ -152,7 +196,7 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
     bail_if(!CreatePipe(&pipe_out, &si.hStdOutput, &sa, 0), "CreatePipe stdout");
     bail_if(!SetHandleInformation(pipe_out, HANDLE_FLAG_INHERIT, 0), "SetHandleInformation stdout");
   } else if(IS_STRING(outfun)){
-    si.hStdOutput = fd(CHAR(STRING_ELT(outfun, 0)));
+    si.hStdOutput = fd_write(CHAR(STRING_ELT(outfun, 0)));
   }
 
   //set STDERR
@@ -160,21 +204,17 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
     bail_if(!CreatePipe(&pipe_err, &si.hStdError, &sa, 0), "CreatePipe stderr");
     bail_if(!SetHandleInformation(pipe_err, HANDLE_FLAG_INHERIT, 0), "SetHandleInformation stdout");
   } else if(IS_STRING(errfun)){
-    si.hStdError = fd(CHAR(STRING_ELT(errfun, 0)));
+    si.hStdError = fd_write(CHAR(STRING_ELT(errfun, 0)));
+  }
+
+  if(IS_STRING(input)){
+    si.hStdInput = fd_read(CHAR(STRING_ELT(input, 0)));
   }
 
   //append args into full command line
-  size_t max_len = 32768;
-  char argv[32769] = "";
-  for(int i = 0; i < Rf_length(args); i++){
-    size_t len = Rf_length(STRING_ELT(args, i));
-    if(len > max_len)
-      Rf_error("Command too long (max 32768)");
-    strcat(argv, CHAR(STRING_ELT(args, i)));
-    if(i < Rf_length(args) - 1)
-      strcat(argv, " ");
-    max_len = max_len - (len + 1);
-  }
+  wchar_t *argv = sexp_to_wchar(args);
+  if(wcslen(argv) >= 32768)
+    Rf_error("Windows commands cannot be longer than 32,768 characters");
   PROCESS_INFORMATION pi = {0};
   const char * cmd = CHAR(STRING_ELT(command, 0));
   DWORD dwCreationFlags =  CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB | CREATE_SUSPENDED;
@@ -182,7 +222,9 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
   if(!block)
     dwCreationFlags |= CREATE_NEW_PROCESS_GROUP; //allows sending CTRL+BREAK
   */
-  if(!CreateProcess(NULL, argv, &sa, &sa, TRUE, dwCreationFlags, NULL, NULL, &si, &pi))
+
+  //printf("ARGV: %S\n", argv); //NOTE capital %S for formatting wchar_t str
+  if(!CreateProcessW(NULL, argv, &sa, &sa, TRUE, dwCreationFlags, NULL, NULL, &si, &pi))
     Rf_errorcall(R_NilValue, "Failed to execute '%s' (%s)", cmd, formatError(GetLastError()));
 
   //CloseHandle(pi.hThread);
@@ -195,12 +237,14 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait){
   bail_if(!AssignProcessToJobObject(job, proc), "AssignProcessToJobObject");
   ResumeThread(thread);
   CloseHandle(thread);
+  free(argv);
 
   int res = pid;
+  const HANDLE all_handles[3] = {proc, pipe_out, pipe_err};
   if(block){
     int running = 1;
     while(running){
-      running = WaitForSingleObject(proc, 200);
+      running = WaitForMultipleObjects(3, all_handles, 0, 200);
       ReadFromPipe(outfun, pipe_out);
       ReadFromPipe(errfun, pipe_err);
       if(pending_interrupt()){
