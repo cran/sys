@@ -1,5 +1,6 @@
 #include <Rinternals.h>
 #include <windows.h>
+#include <sys/time.h>
 
 /* NOTES
  * On Windows, when wait = FALSE and std_out = TRUE or std_err = TRUE
@@ -178,7 +179,7 @@ static SEXP make_handle_ptr(HANDLE proc){
   return ptr;
 }
 
-SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEXP input){
+SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP input, SEXP wait, SEXP timeout){
   int block = asLogical(wait);
   SECURITY_ATTRIBUTES sa;
   sa.nLength = sizeof(sa);
@@ -224,8 +225,12 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEX
   */
 
   //printf("ARGV: %S\n", argv); //NOTE capital %S for formatting wchar_t str
-  if(!CreateProcessW(NULL, argv, &sa, &sa, TRUE, dwCreationFlags, NULL, NULL, &si, &pi))
+  if(!CreateProcessW(NULL, argv, &sa, &sa, TRUE, dwCreationFlags, NULL, NULL, &si, &pi)){
+    //Failure to start, probably non existing program. Cleanup.
+    CloseHandle(pipe_out); CloseHandle(pipe_err);
+    CloseHandle(si.hStdInput); CloseHandle(si.hStdOutput); CloseHandle(si.hStdInput);
     Rf_errorcall(R_NilValue, "Failed to execute '%s' (%s)", cmd, formatError(GetLastError()));
+  }
 
   //CloseHandle(pi.hThread);
   DWORD pid = GetProcessId(pi.hProcess);
@@ -239,15 +244,27 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEX
   CloseHandle(thread);
   free(argv);
 
+  //start timer
+  int timeout_reached = 0;
+  struct timeval start, end;
+  double totaltime = REAL(timeout)[0];
+  gettimeofday(&start, NULL);
+
   int res = pid;
-  const HANDLE all_handles[3] = {proc, pipe_out, pipe_err};
   if(block){
     int running = 1;
     while(running){
-      running = WaitForMultipleObjects(3, all_handles, 0, 200);
+      //wait 1ms, enough to fix busy waiting. Windows does not support polling on pipes.
+      running = WaitForSingleObject(proc, 1);
       ReadFromPipe(outfun, pipe_out);
       ReadFromPipe(errfun, pipe_err);
-      if(pending_interrupt()){
+
+      //check for timeout
+      if(totaltime > 0){
+        gettimeofday(&end, NULL);
+        timeout_reached = ((end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6) > totaltime;
+      }
+      if(pending_interrupt() || timeout_reached){
         EnumWindows(closeWindows, pid);
         if(!TerminateJobObject(job, -2))
           Rf_errorcall(R_NilValue, "TerminateJobObject failed: %d", GetLastError());
@@ -275,6 +292,11 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEX
   CloseHandle(job);
   CloseHandle(si.hStdError);
   CloseHandle(si.hStdOutput);
+  CloseHandle(si.hStdInput);
+  if(timeout_reached && res){
+    Rf_errorcall(R_NilValue, "Program '%s' terminated (timeout reached: %.2fsec)",
+                 CHAR(STRING_ELT(command, 0)), totaltime);
+  }
   SEXP out = PROTECT(ScalarInteger(res));
   if(!block)
     setAttrib(out, install("handle"), make_handle_ptr(proc));

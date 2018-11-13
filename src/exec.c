@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <signal.h>
 #include <string.h>
 #include <fcntl.h>
@@ -45,13 +46,24 @@ void bail_if(int err, const char * what){
     Rf_errorcall(R_NilValue, "System failure for: %s (%s)", what, strerror(errno));
 }
 
+/* In the fork we don't want to use the R API anymore */
+void print_if(int err, const char * what){
+  if(err){
+    FILE *stream = fdopen(STDERR_FILENO, "w");
+    if(stream){
+      fprintf(stream, "System failure for: %s (%s)\n", what, strerror(errno));
+      fclose(stream);
+    }
+  }
+}
+
 void warn_if(int err, const char * what){
   if(err)
     Rf_warningcall(R_NilValue, "System failure for: %s (%s)", what, strerror(errno));
 }
 
 void set_pipe(int input, int output[2]){
-  bail_if(dup2(output[w], input) < 0, "dup2() stdout/stderr");
+  print_if(dup2(output[w], input) < 0, "dup2() stdout/stderr");
   close(output[r]);
   close(output[w]);
 }
@@ -62,21 +74,23 @@ void pipe_set_read(int pipe[2]){
 }
 
 void set_input(const char * file){
-  int fd = open(file, O_RDONLY);
-  warn_if(dup2(fd, STDIN_FILENO) < 0, "dup2() input");
+  close(STDIN_FILENO);
+  int fd = open(file, O_RDONLY); //lowest numbered FD should be 0
+  print_if(fd != 0, "open() set_input not equal to STDIN_FILENO");
+}
+
+void set_output(int target, const char * file){
+  close(target);
+  int fd = open(file, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+  print_if(fd < 0, "open() set_output");
+  if(fd == target)
+    return;
+  print_if(fcntl(fd, F_DUPFD, target) < 0, "fcntl() set_output");
   close(fd);
 }
 
-void set_output(int fd, const char * file){
-  int out = open(file, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-  warn_if(dup2(out, fd) < 0, "dup2() output");
-  close(out);
-}
-
-void safe_close(int fd){
-  int fdnull = open("/dev/null", O_WRONLY);
-  warn_if(dup2(fdnull, fd), "dup2 in safe_close()");
-  close(fdnull);
+void safe_close(int target){
+  set_output(target, "/dev/null");
 }
 
 static void check_child_success(int fd, const char * cmd){
@@ -123,7 +137,7 @@ void print_output(int pipe_out[2], SEXP fun){
     R_callback(fun, buffer, len);
 }
 
-SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEXP input){
+SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP input, SEXP wait, SEXP timeout){
   //split process
   int block = asLogical(wait);
   int pipe_out[2];
@@ -175,8 +189,13 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEX
 #endif
     //OSX: do NOT change pgid, so we receive signals from parent group
 
-    // Set STDIN for fork (default is /dev/null)
-    set_input(IS_STRING(input) ? CHAR(STRING_ELT(input, 0)) : "/dev/null");
+    // Set STDIN for child (default is /dev/null)
+    if(IS_FALSE(input)){
+      //set stdin to unreadable /dev/null (O_WRONLY)
+      safe_close(STDIN_FILENO);
+    } else if(!IS_TRUE(input)){
+      set_input(IS_STRING(input) ? CHAR(STRING_ELT(input, 0)) : "/dev/null");
+    }
 
     //close all file descriptors before exit, otherwise they can segfault
     for (int i = 3; i < sysconf(_SC_OPEN_MAX); i++) {
@@ -197,7 +216,7 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEX
     execvp(CHAR(STRING_ELT(command, 0)), argv);
 
     //execvp failed! Send errno to parent
-    warn_if(write(failure[w], &errno, sizeof(errno)) < 0, "write to failure pipe");
+    print_if(write(failure[w], &errno, sizeof(errno)) < 0, "write to failure pipe");
     close(failure[w]);
 
     //exit() not allowed by CRAN. raise() should suffice
@@ -216,13 +235,32 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEX
   pipe_set_read(pipe_out);
   pipe_set_read(pipe_err);
 
+  //start timer
+  struct timeval start, end;
+  double elapsed, totaltime = REAL(timeout)[0];
+  gettimeofday(&start, NULL);
+
   //status -1 means error, 0 means running
   int status = 0;
   int killcount = 0;
   while (waitpid(pid, &status, WNOHANG) >= 0){
+    //check for timeout
+    if(totaltime > 0){
+      gettimeofday(&end, NULL);
+      elapsed = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6;
+      if(killcount == 0 && elapsed > totaltime){
+        warn_if(kill(pid, SIGINT), "interrupt child");
+        killcount++;
+      } else if(killcount == 1 && elapsed > (totaltime + 1)){
+        warn_if(kill(pid, SIGKILL), "force kill child");
+        killcount++;
+      }
+    }
+
+    //for well behaved programs, SIGINT is automatically forwarded
     if(pending_interrupt()){
       //pass interrupt to child. On second try we SIGKILL.
-      warn_if(kill(-pid, killcount ? SIGKILL : SIGINT), "kill child");
+      warn_if(kill(pid, killcount ? SIGKILL : SIGINT), "kill child");
       killcount++;
     }
     //make sure to empty the pipes, even if fun == NULL
@@ -243,8 +281,15 @@ SEXP C_execute(SEXP command, SEXP args, SEXP outfun, SEXP errfun, SEXP wait, SEX
     return ScalarInteger(WEXITSTATUS(status));
   } else {
     int signal = WTERMSIG(status);
-    if(signal != 0)
-      Rf_errorcall(R_NilValue, "Program '%s' terminated by SIGNAL (%s)", CHAR(STRING_ELT(command, 0)), strsignal(signal));
+    if(signal != 0){
+      if(killcount && elapsed > totaltime){
+        Rf_errorcall(R_NilValue, "Program '%s' terminated (timeout reached: %.2fsec)",
+                     CHAR(STRING_ELT(command, 0)), totaltime);
+      } else {
+        Rf_errorcall(R_NilValue, "Program '%s' terminated by SIGNAL (%s)",
+                     CHAR(STRING_ELT(command, 0)), strsignal(signal));
+      }
+    }
     Rf_errorcall(R_NilValue, "Program terminated abnormally");
   }
 }
