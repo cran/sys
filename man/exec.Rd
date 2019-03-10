@@ -80,7 +80,7 @@ The child can be killed with \link[tools:pskill]{tools::pskill}.
 The \code{exec_internal} function is a convenience wrapper around \code{exec_wait} which
 automatically captures output streams and raises an error if execution fails.
 Upon success it returns a list with status code, and raw vectors containing
-stdout and stderr data (use \link{rawToChar} for converting to text).
+stdout and stderr data (use \link{as_text} for converting to text).
 }
 \section{Output Streams}{
 
@@ -99,7 +99,7 @@ types:
 \itemize{
 \item \emph{connection} a writable R \link{connection} object such as \link{stdout} or \link{stderr}
 \item \emph{function}: callback function with one argument accepting a raw vector (use
-\link{rawToChar} to convert to text).
+\link{as_text} to convert to text).
 }
 
 When using \code{exec_background} with \code{std_out = TRUE} or \code{std_err = TRUE} on Windows,
@@ -115,7 +115,7 @@ status <- exec_wait("date")
 # Capture std/out
 out <- exec_internal("date")
 print(out$status)
-cat(rawToChar(out$stdout))
+cat(as_text(out$stdout))
 
 if(nchar(Sys.which("ping"))){
 

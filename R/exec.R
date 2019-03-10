@@ -28,7 +28,7 @@
 #' The `exec_internal` function is a convenience wrapper around `exec_wait` which
 #' automatically captures output streams and raises an error if execution fails.
 #' Upon success it returns a list with status code, and raw vectors containing
-#' stdout and stderr data (use [rawToChar] for converting to text).
+#' stdout and stderr data (use [as_text] for converting to text).
 #'
 #' @section Output Streams:
 #'
@@ -45,7 +45,7 @@
 #'
 #'  - *connection* a writable R [connection] object such as [stdout] or [stderr]
 #'  - *function*: callback function with one argument accepting a raw vector (use
-#'  [rawToChar] to convert to text).
+#'  [as_text] to convert to text).
 #'
 #' When using `exec_background` with `std_out = TRUE` or `std_err = TRUE` on Windows,
 #' separate threads are used to print output. This works in RStudio and RTerm but
@@ -80,7 +80,7 @@
 #' # Capture std/out
 #' out <- exec_internal("date")
 #' print(out$status)
-#' cat(rawToChar(out$stdout))
+#' cat(as_text(out$stdout))
 #'
 #' if(nchar(Sys.which("ping"))){
 #'
@@ -201,7 +201,7 @@ execute <- function(cmd, args, std_out, std_err, std_in, wait, timeout){
   stopifnot(is.character(cmd))
   if(.Platform$OS.type == 'windows'){
     if(!inherits(cmd, 'AsIs'))
-      cmd <- to_shortpath(cmd)
+      cmd <- utils::shortPathName(path.expand(cmd))
     if(!inherits(args, 'AsIs'))
       args <- windows_quote(args)
   }
@@ -210,11 +210,4 @@ execute <- function(cmd, args, std_out, std_err, std_in, wait, timeout){
   if(length(std_in) && !is.logical(std_in)) # Only files supported for stdin
     std_in <- enc2utf8(normalizePath(std_in, mustWork = TRUE))
   .Call(C_execute, cmd, argv, std_out, std_err, std_in, wait, timeout)
-}
-
-to_shortpath <- function(path){
-  out <- Sys.which(path.expand(path))
-  if(nchar(out))
-    return(out)
-  return(path)
 }
