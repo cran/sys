@@ -1,11 +1,11 @@
-6d6409a22e152a392893324cbafb45e9 *DESCRIPTION
+30fcf4afecea5166d5ac6fb6f0492a7d *DESCRIPTION
 f35c1dd7a6e913e967bd6e03dd8a3c18 *LICENSE
 9c1f8e2d8ed675addf415c3ef5be77f7 *NAMESPACE
-c6a0fb80325c6010f638500a73bf02b9 *NEWS
+38aa529e28701bae1d9fdc0b4cfc7203 *NEWS
 21e2f14cf7db8259c5bf76c4d88a2196 *R/astext.R
 728bafa32212be9a91ed31c2bdfd0ada *R/callr.R
 50c5125076999c441c3077914ef170dd *R/deprecated.R
-312e0a6ee91995b59d0e2d6d62e4312f *R/exec.R
+ba8ef9bb6b48f62812b2290e890cd32a *R/exec.R
 14bed5f4e5e9f156e2299b8fac970bcf *R/quote.R
 5b4875f3218c8cbfd689e0ae3e504c72 *inst/WORDLIST
 6c786db85c26a880352ad8593ad6250f *inst/utf8.txt
@@ -21,10 +21,10 @@ bbd735bd93f714f967c3b251cd94ab3d *src/win32/exec.c
 78a7f421feb7208c58c9197ba4eb5edb *tests/spelling.R
 7e95dde88a7eec2a10cb0bead876a6bc *tests/testthat.R
 e7120c55fd5ea95f1e379b7d8ca89cb4 *tests/testthat/test-binary.R
-3e7ded558244f0beac0736131202a054 *tests/testthat/test-encoding.R
+6f73ad3e0d7eb4b6a3ed8d38178f2334 *tests/testthat/test-encoding.R
 c19a199c3d65a38d2b03533a31b64973 *tests/testthat/test-error.R
 17a52a640b0262def033c68395bbf5eb *tests/testthat/test-nesting.R
 a4c660d029081a26cd63b54e43aa220a *tests/testthat/test-quote.R
 8c3a55f1c727ffa56f56fc425de7e00b *tests/testthat/test-stdin.R
 849f263186ae614d10bdc58a7977547d *tests/testthat/test-stdout.R
-084d191f393a423986263ce13dfae880 *tests/testthat/test-timeout.R
+aab612f83c705b9d6d30687bcf2650bb *tests/testthat/test-timeout.R
