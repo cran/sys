@@ -1,7 +1,7 @@
-c4d32ed033fbabbc1d3de19167b3e1fa *DESCRIPTION
+5a41326fc03d14adffb3597d4a836bab *DESCRIPTION
 f35c1dd7a6e913e967bd6e03dd8a3c18 *LICENSE
 9c1f8e2d8ed675addf415c3ef5be77f7 *NAMESPACE
-6ef2638ab6d1ebe5557c0adc366c547b *NEWS
+26fca7a853033c9cb5da5a14d05497aa *NEWS
 21e2f14cf7db8259c5bf76c4d88a2196 *R/astext.R
 728bafa32212be9a91ed31c2bdfd0ada *R/callr.R
 50c5125076999c441c3077914ef170dd *R/deprecated.R
@@ -15,7 +15,7 @@ ba8ef9bb6b48f62812b2290e890cd32a *R/exec.R
 2971e740377131194efe7f6f67176d0a *man/exec_r.Rd
 b9eda114d61f26b4fa44948b28a3436f *man/quote.Rd
 4451ceeee120a005b47df3de92482984 *src/Makevars.win
-59ecf0b71e74ccf027f0aa0b22b070c3 *src/exec.c
+39cda7bc97bf6684f7e4b3e101bbebcb *src/exec.c
 d623e255d620a7f40afa7699505b197e *src/init.c
 bbd735bd93f714f967c3b251cd94ab3d *src/win32/exec.c
 78a7f421feb7208c58c9197ba4eb5edb *tests/spelling.R
