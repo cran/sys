@@ -1,7 +1,7 @@
-5a41326fc03d14adffb3597d4a836bab *DESCRIPTION
+6ea16cbe1ca36469d5cdeb6ba254bae2 *DESCRIPTION
 f35c1dd7a6e913e967bd6e03dd8a3c18 *LICENSE
 9c1f8e2d8ed675addf415c3ef5be77f7 *NAMESPACE
-26fca7a853033c9cb5da5a14d05497aa *NEWS
+66be9d58ccce65e90d7381ac3a15f8a6 *NEWS
 21e2f14cf7db8259c5bf76c4d88a2196 *R/astext.R
 728bafa32212be9a91ed31c2bdfd0ada *R/callr.R
 50c5125076999c441c3077914ef170dd *R/deprecated.R
@@ -17,7 +17,7 @@ b9eda114d61f26b4fa44948b28a3436f *man/quote.Rd
 4451ceeee120a005b47df3de92482984 *src/Makevars.win
 39cda7bc97bf6684f7e4b3e101bbebcb *src/exec.c
 d623e255d620a7f40afa7699505b197e *src/init.c
-bbd735bd93f714f967c3b251cd94ab3d *src/win32/exec.c
+166d035523f1d65682cf2dd648b5cd1f *src/win32/exec.c
 78a7f421feb7208c58c9197ba4eb5edb *tests/spelling.R
 7e95dde88a7eec2a10cb0bead876a6bc *tests/testthat.R
 e7120c55fd5ea95f1e379b7d8ca89cb4 *tests/testthat/test-binary.R
